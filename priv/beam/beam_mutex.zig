@@ -4,22 +4,69 @@ const e = @import("erl_nif.zig");
 
 const MutexError = error{CreationFail};
 
+pub const DynBeamMutex = struct {
+  mutex_ref: ?*e.ErlNifMutex = null,
+  name: *const []u8,
+
+  const Self = @This();
+
+  pub fn init(self: *Self) !void {
+     if (self.mutex_ref) |_| {} else {
+         // Do this ptr-int dance since enif_mutex_create
+         // accepts char * instead of const char *
+         // TODO: use @constCast in Zig >= 0.11
+         self.mutex_ref =
+             e.enif_mutex_create(@intToPtr([*c]u8, @ptrToInt(self.name.ptr))) orelse
+             return MutexError.CreationFail;
+     }
+  }
+
+  pub fn deinit(self: *Self) void {
+      if (self.mutex_ref) |mutex| {
+          e.enif_mutex_destroy(mutex);
+          self.mutex_ref = null;
+      }
+  }
+
+  pub fn tryLock(self: *Self) bool {
+      return switch (e.enif_mutex_trylock(self.mutex_ref)) {
+          0 => zero: {
+              e.enif_mutex_lock(self.mutex_ref);
+              break :zero true;
+          },
+          e.EBUSY => false,
+          _ => unreachable,
+      };
+  }
+
+  /// Acquire the mutex. Will deadlock if the mutex is already
+  /// held by the calling thread.
+  pub fn lock(self: *Self) void {
+      e.enif_mutex_lock(self.mutex_ref);
+  }
+
+  pub fn unlock(self: *Self) void {
+      e.enif_mutex_unlock(self.mutex_ref);
+  }
+};
+
 pub fn BeamMutex(comptime name: []const u8) type {
     return struct {
         mutex_ref: ?*e.ErlNifMutex = null,
         const Self = @This();
 
-        /// initializes the mutex.  Note this is failable.
+        /// initializes a mutex.  Note this is failable.
         pub fn init(self: *Self) !void {
-            if (self.mutex_ref) |_| {} else {
-                // Do this ptr-int dance since enif_mutex_create
-                // accepts char * instead of const char *
-                // TODO: use @constCast in Zig >= 0.11
-                self.mutex_ref =
-                    e.enif_mutex_create(@intToPtr([*c]u8, @ptrToInt(name.ptr))) orelse
-                    return MutexError.CreationFail;
-            }
+           if (self.mutex_ref) |_| {} else {
+               // Do this ptr-int dance since enif_mutex_create
+               // accepts char * instead of const char *
+               // TODO: use @constCast in Zig >= 0.11
+               self.mutex_ref =
+                   e.enif_mutex_create(@intToPtr([*c]u8, @ptrToInt(name.ptr))) orelse
+                   return MutexError.CreationFail;
+           }
         }
+
 
         pub fn deinit(self: *Self) void {
             if (self.mutex_ref) |mutex| {
